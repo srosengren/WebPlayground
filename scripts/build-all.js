@@ -10,7 +10,7 @@ const experiments = collectExperiments(join(root, 'experiments'))
 writeFileSync(join(root, 'src', 'experiments.json'), JSON.stringify(experiments, null, 2) + '\n')
 console.log(`Collected ${experiments.length} experiment(s)`)
 
-execSync('vite build', { stdio: 'inherit', cwd: root })
+execSync(join(root, 'node_modules', '.bin', 'vite') + ' build', { stdio: 'inherit', cwd: root })
 
 for (const { slug } of experiments) {
   const expDir = join(root, 'experiments', slug)
