@@ -8,7 +8,7 @@
   ],
   "scripts": {
     "dev": "node scripts/collect-experiments.js && vite",
-    "build": "vite build",
+    "build": "node scripts/build-all.js",
     "preview": "vite preview"
   },
   "dependencies": {
