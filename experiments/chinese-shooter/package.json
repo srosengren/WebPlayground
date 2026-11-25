@@ -1,0 +1,15 @@
+{
+  "name": "chinese-shooter",
+  "description": "HSK runner — steer into correct answers for score multipliers",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "vite": "^6.0.0"
+  }
+}
