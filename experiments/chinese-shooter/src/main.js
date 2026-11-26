@@ -15,7 +15,7 @@ resize()
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const SHIP_Y       = H - 70
-const BUBBLE_R     = 48
+const BUBBLE_R     = 36
 const BULLET_SPEED = 9
 const SHIP_SPEED   = 5.5
 const NUM_OPTIONS  = 3
@@ -306,13 +306,6 @@ function drawQuestion(card) {
   ctx.stroke()
   ctx.textAlign   = 'center'
 
-  if (feedTimer > 0 && feedback) {
-    ctx.font      = 'bold 24px sans-serif'
-    ctx.fillStyle = feedback.color
-    ctx.fillText(feedback.text, W / 2, 76)
-    return
-  }
-
   const p     = promptFor(card)
   const isBig = p.big.length <= 4
   ctx.font      = `bold ${isBig ? 50 : 26}px sans-serif`
@@ -326,6 +319,16 @@ function drawQuestion(card) {
   ctx.font      = '13px sans-serif'
   ctx.fillStyle = '#445566'
   ctx.fillText(p.label, W / 2, 123)
+}
+
+function drawFeedback() {
+  if (!feedback || feedTimer <= 0) return
+  ctx.globalAlpha = Math.min(feedTimer / 300, 1)
+  ctx.textAlign   = 'center'
+  ctx.font        = 'bold 20px sans-serif'
+  ctx.fillStyle   = feedback.color
+  ctx.fillText(feedback.text, W / 2, 148)
+  ctx.globalAlpha = 1
 }
 
 function drawBubbles() {
@@ -349,17 +352,17 @@ function drawBubbles() {
     ctx.fill(); ctx.stroke()
 
     const isZh    = /[一-鿿]/.test(b.text)
-    const fontSize = isZh && b.text.length <= 2 ? 26 : isZh ? 20 : b.text.length > 10 ? 14 : 17
+    const fontSize = isZh && b.text.length <= 2 ? 20 : isZh ? 14 : b.text.length > 9 ? 11 : 14
     ctx.font      = `bold ${fontSize}px sans-serif`
     ctx.fillStyle = b.hit ? (b.isCorrect ? '#00ff88' : '#ff5566') : '#ccdaff'
     ctx.textAlign = 'center'
-    if (b.text.length > 12 && !isZh) {
+    if (b.text.length > 9 && !isZh) {
       const mid = Math.ceil(b.text.length / 2)
       const sp  = b.text.lastIndexOf(' ', mid) > 0 ? b.text.lastIndexOf(' ', mid) : mid
-      ctx.fillText(b.text.slice(0, sp),  b.x, b.y - 7)
-      ctx.fillText(b.text.slice(sp + 1), b.x, b.y + 13)
+      ctx.fillText(b.text.slice(0, sp),  b.x, b.y - 5)
+      ctx.fillText(b.text.slice(sp + 1), b.x, b.y + 9)
     } else {
-      ctx.fillText(b.text, b.x, b.y + 6)
+      ctx.fillText(b.text, b.x, b.y + 5)
     }
     ctx.globalAlpha = 1
   }
@@ -502,6 +505,7 @@ function loop(ts) {
   } else {
     drawBg()
     if (currentCard) drawQuestion(currentCard)
+    drawFeedback()
     drawBubbles()
     drawBullets()
     drawFlash()
