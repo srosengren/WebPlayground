@@ -15,11 +15,12 @@ resize()
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const SHIP_Y       = H - 70
-const BUBBLE_BAND  = { top: 160, bottom: 390 }   // y range bubbles drift in
 const BUBBLE_R     = 48
 const BULLET_SPEED = 9
 const SHIP_SPEED   = 5.5
-const NUM_OPTIONS  = 3                            // 3 bubbles per question
+const NUM_OPTIONS  = 3
+const SPAWN_Y      = 160       // bubbles start just below the question box
+const PASS_Y       = SHIP_Y    // bubble center crosses this → it got through
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function pick(arr, n) {
@@ -32,10 +33,8 @@ function pick(arr, n) {
 }
 
 function shuffleOptions(card) {
-  // Pick correct + (NUM_OPTIONS-1) distractors
   const distractors = pick(card.distractors, NUM_OPTIONS - 1)
   const opts = [card.correct, ...distractors]
-  // Fisher-Yates
   for (let i = opts.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [opts[i], opts[j]] = [opts[j], opts[i]]
@@ -43,14 +42,13 @@ function shuffleOptions(card) {
   return opts
 }
 
-// Shuffle deck and pick cards for this run
-function buildRun() {
+function buildDeck() {
   const copy = [...DECK]
   for (let i = copy.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [copy[i], copy[j]] = [copy[j], copy[i]]
   }
-  return copy.slice(0, 10)   // 10 questions per run
+  return copy
 }
 
 function roundRect(x, y, w, h, r) {
@@ -67,63 +65,73 @@ function roundRect(x, y, w, h, r) {
   ctx.closePath()
 }
 
+// Speed scales from 0.7 to 1.5 px/frame over 20 questions
+function bubbleSpeed() {
+  return 0.7 + Math.min(questionsAnswered / 20, 1.0) * 0.8
+}
+
 // ── State ─────────────────────────────────────────────────────────────────────
-let phase      = 'start'
-let run        = []        // cards for this run
-let runIdx     = 0
-let bubbles    = []        // { x, y, vx, vy, text, isCorrect, hit, hitTimer }
-let bullets    = []        // { x, y }
-let shipX      = W / 2
-let targetBubble = null    // bubble currently being aimed at (held)
-let score      = 0
-let streak     = 0
-let flashColor = ''
-let flashAlpha = 0
-let feedback   = null      // { text, color }
-let feedTimer  = 0
-let time       = 0
+let phase             = 'start'
+let deck              = []
+let deckIdx           = 0
+let currentCard       = null
+let bubbles           = []
+let bullets           = []
+let shipX             = W / 2
+let targetBubble      = null
+let score             = 0
+let streak            = 0
+let lives             = 3
+let questionsAnswered = 0
+let resolving         = false
+let flashColor        = ''
+let flashAlpha        = 0
+let feedback          = null
+let feedTimer         = 0
+let time              = 0
 
 // ── Bubble spawning ───────────────────────────────────────────────────────────
 function spawnBubbles(card) {
   const opts = shuffleOptions(card)
-  bubbles = opts.map((text, i) => {
-    // Spread evenly across x, random y in band
-    const x  = (W / (NUM_OPTIONS + 1)) * (i + 1)
-    const y  = BUBBLE_BAND.top + Math.random() * (BUBBLE_BAND.bottom - BUBBLE_BAND.top)
-    const spd = 0.5 + Math.random() * 0.6
-    const ang = Math.random() * Math.PI * 2
-    return {
-      x, y,
-      vx: Math.cos(ang) * spd,
-      vy: Math.sin(ang) * spd * 0.4,   // gentle vertical drift
-      text,
-      isCorrect: text === card.correct,
-      hit: false,
-      hitTimer: 0,
-    }
-  })
+  bubbles = opts.map((text, i) => ({
+    x: (W / (NUM_OPTIONS + 1)) * (i + 1),
+    y: SPAWN_Y,
+    text,
+    isCorrect: text === card.correct,
+    hit:       false,
+    hitTimer:  0,
+    passed:    false,
+  }))
 }
 
 function nextCard() {
-  if (runIdx >= run.length) { phase = 'done'; return }
+  if (deckIdx >= deck.length) {
+    deck    = buildDeck()
+    deckIdx = 0
+  }
+  currentCard  = deck[deckIdx++]
   targetBubble = null
-  bullets = []
-  feedback = null
-  feedTimer = 0
-  spawnBubbles(run[runIdx++])
-  phase = 'playing'
+  bullets      = []
+  feedback     = null
+  feedTimer    = 0
+  resolving    = false
+  spawnBubbles(currentCard)
+  phase        = 'playing'
 }
 
 function startGame() {
-  run    = buildRun()
-  runIdx = 0
-  score  = 0
-  streak = 0
-  shipX  = W / 2
+  deck              = buildDeck()
+  deckIdx           = 0
+  score             = 0
+  streak            = 0
+  lives             = 3
+  questionsAnswered = 0
+  resolving         = false
+  shipX             = W / 2
   nextCard()
 }
 
-// ── Input helpers ─────────────────────────────────────────────────────────────
+// ── Input ─────────────────────────────────────────────────────────────────────
 function getCanvasPos(clientX, clientY) {
   const r = canvas.getBoundingClientRect()
   return {
@@ -133,29 +141,25 @@ function getCanvasPos(clientX, clientY) {
 }
 
 function bubbleAt(x, y) {
-  return bubbles.find(b => !b.hit && Math.hypot(b.x - x, b.y - y) < BUBBLE_R + 10)
+  return bubbles.find(b => !b.hit && !b.passed && Math.hypot(b.x - x, b.y - y) < BUBBLE_R + 10)
 }
 
 function onPress(x, y) {
   if (phase === 'start') { startGame(); return }
-  if (phase === 'done')  {
-    // play-again button zone
+  if (phase === 'done') {
     if (Math.abs(x - W / 2) < 90 && y > H * 0.65 && y < H * 0.65 + 54) startGame()
     return
   }
   if (phase !== 'playing') return
-  const b = bubbleAt(x, y)
-  targetBubble = b || null
+  targetBubble = bubbleAt(x, y) ?? null
 }
 
 function onRelease() { targetBubble = null }
 
-// Mouse
-canvas.addEventListener('mousedown', e => { const p = getCanvasPos(e.clientX, e.clientY); onPress(p.x, p.y) })
-canvas.addEventListener('mouseup',   onRelease)
+canvas.addEventListener('mousedown',  e => { const p = getCanvasPos(e.clientX, e.clientY); onPress(p.x, p.y) })
+canvas.addEventListener('mouseup',    onRelease)
 canvas.addEventListener('mouseleave', onRelease)
 
-// Touch
 canvas.addEventListener('touchstart', e => {
   e.preventDefault()
   const p = getCanvasPos(e.touches[0].clientX, e.touches[0].clientY)
@@ -164,68 +168,82 @@ canvas.addEventListener('touchstart', e => {
 canvas.addEventListener('touchend',    e => { e.preventDefault(); onRelease() }, { passive: false })
 canvas.addEventListener('touchcancel', e => { e.preventDefault(); onRelease() }, { passive: false })
 
-// Keyboard fallback: left/right move ship, space shoots nearest bubble
-document.addEventListener('keydown', e => {
-  if (phase === 'start') { startGame(); return }
-})
+document.addEventListener('keydown', e => { if (phase === 'start') startGame() })
 
 // ── Update ────────────────────────────────────────────────────────────────────
 let lastTs = 0, bulletCooldown = 0
 
 function update(dt) {
-  time += dt
-  flashAlpha = Math.max(0, flashAlpha - 0.025 * (dt / 16))
+  time       += dt
+  flashAlpha  = Math.max(0, flashAlpha - 0.025 * (dt / 16))
   if (feedTimer > 0) feedTimer -= dt
-
   if (phase !== 'playing') return
 
-  // ── Ship movement ──
-  if (targetBubble && !targetBubble.hit) {
+  // Ship tracks the held bubble
+  if (targetBubble && !targetBubble.hit && !targetBubble.passed) {
     const dx = targetBubble.x - shipX
-    const step = SHIP_SPEED * (dt / 16)
-    shipX += Math.sign(dx) * Math.min(Math.abs(dx), step)
+    shipX += Math.sign(dx) * Math.min(Math.abs(dx), SHIP_SPEED * (dt / 16))
   }
   shipX = Math.max(24, Math.min(W - 24, shipX))
 
-  // ── Bubble drift ──
+  // Advance bubbles downward
+  const spd = bubbleSpeed()
   for (const b of bubbles) {
-    if (b.hit) { b.hitTimer -= dt; continue }
-    b.x += b.vx * (dt / 16)
-    b.y += b.vy * (dt / 16)
-    // Bounce off walls
-    if (b.x < BUBBLE_R)     { b.x = BUBBLE_R;     b.vx *= -1 }
-    if (b.x > W - BUBBLE_R) { b.x = W - BUBBLE_R; b.vx *= -1 }
-    if (b.y < BUBBLE_BAND.top)    { b.y = BUBBLE_BAND.top;    b.vy *= -1 }
-    if (b.y > BUBBLE_BAND.bottom) { b.y = BUBBLE_BAND.bottom; b.vy *= -1 }
-  }
-
-  // ── Bullets ──
-  bulletCooldown -= dt
-  if (targetBubble && !targetBubble.hit && bulletCooldown <= 0) {
-    bullets.push({ x: shipX, y: SHIP_Y - 28 })
-    bulletCooldown = 120   // ms between shots
-  }
-
-  for (let i = bullets.length - 1; i >= 0; i--) {
-    bullets[i].y -= BULLET_SPEED * (dt / 16)
-    if (bullets[i].y < -20) { bullets.splice(i, 1); continue }
-
-    // Collision with bubbles
-    for (const b of bubbles) {
-      if (b.hit) continue
-      if (Math.hypot(bullets[i].x - b.x, bullets[i].y - b.y) < BUBBLE_R) {
-        bullets.splice(i, 1)
-        b.hit = true
-        b.hitTimer = 500
-        scoreHit(b)
-        break
+    if (b.hit)    { b.hitTimer -= dt; continue }
+    if (b.passed) continue
+    b.y += spd * (dt / 16)
+    if (b.y >= PASS_Y) {
+      b.passed = true
+      if (b === targetBubble) targetBubble = null
+      if (b.isCorrect && !resolving) {
+        streak     = 0
+        lives      = Math.max(0, lives - 1)
+        flashColor = '#ff4400'; flashAlpha = 0.4
+        feedback   = { text: 'Missed!  −♥', color: '#ff7744' }
+        feedTimer  = 1000
       }
     }
   }
 
-  // After all bubbles resolved, advance
-  if (bubbles.every(b => b.hit && b.hitTimer <= 0)) {
-    setTimeout(nextCard, 200)
+  // Fire bullets while holding a live bubble
+  bulletCooldown -= dt
+  if (targetBubble && !targetBubble.hit && !targetBubble.passed && bulletCooldown <= 0) {
+    bullets.push({ x: shipX, y: SHIP_Y - 28 })
+    bulletCooldown = 120
+  }
+
+  for (let i = bullets.length - 1; i >= 0; i--) {
+    const bl = bullets[i]
+    bl.y -= BULLET_SPEED * (dt / 16)
+    if (bl.y < -20) { bullets.splice(i, 1); continue }
+    let consumed = false
+    for (const b of bubbles) {
+      if (b.hit || b.passed) continue
+      if (Math.hypot(bl.x - b.x, bl.y - b.y) < BUBBLE_R) {
+        bullets.splice(i, 1)
+        b.hit = true; b.hitTimer = 500
+        scoreHit(b)
+        consumed = true
+        break
+      }
+    }
+    if (consumed) continue
+  }
+
+  // Resolution: once the correct bubble is gone (hit or passed), pop the rest
+  if (!resolving) {
+    const correct = bubbles.find(b => b.isCorrect)
+    if (correct && (correct.hit || correct.passed)) {
+      for (const b of bubbles) {
+        if (!b.hit && !b.passed) { b.hit = true; b.hitTimer = 400 }
+      }
+    }
+    if (bubbles.every(b => b.hit ? b.hitTimer <= 0 : b.passed)) {
+      resolving = true
+      questionsAnswered++
+      if (lives <= 0) { phase = 'done'; return }
+      setTimeout(nextCard, 250)
+    }
   }
 }
 
@@ -233,19 +251,15 @@ function scoreHit(b) {
   if (b.isCorrect) {
     streak++
     const mult = streak >= 4 ? 6 : streak >= 3 ? 4 : streak >= 2 ? 2 : 1
-    score += 100 * mult
-    flashColor  = '#00e676'
-    flashAlpha  = 0.3
-    feedback    = { text: streak >= 2 ? `Correct!  ×${mult}` : 'Correct!', color: '#00ff88' }
-    feedTimer   = 1200
+    score     += 100 * mult
+    flashColor = '#00e676'; flashAlpha = 0.3
+    feedback   = { text: streak >= 2 ? `Correct!  ×${mult}` : 'Correct!', color: '#00ff88' }
+    feedTimer  = 1200
     targetBubble = null
-    // Pop remaining bubbles after short delay
-    setTimeout(() => { bubbles.forEach(bub => { if (!bub.hit) { bub.hit = true; bub.hitTimer = 1 } }) }, 300)
   } else {
     streak     = 0
     score      = Math.max(0, score - 50)
-    flashColor = '#ff1744'
-    flashAlpha = 0.3
+    flashColor = '#ff1744'; flashAlpha = 0.3
     feedback   = { text: 'Wrong!  −50', color: '#ff5566' }
     feedTimer  = 900
     targetBubble = null
@@ -279,8 +293,7 @@ function drawQuestion(card) {
   ctx.strokeStyle = '#2a2a5a'
   ctx.lineWidth   = 1.5
   ctx.stroke()
-
-  ctx.textAlign = 'center'
+  ctx.textAlign   = 'center'
 
   if (feedTimer > 0 && feedback) {
     ctx.font      = 'bold 24px sans-serif'
@@ -289,7 +302,7 @@ function drawQuestion(card) {
     return
   }
 
-  const p = promptFor(card)
+  const p     = promptFor(card)
   const isBig = p.big.length <= 4
   ctx.font      = `bold ${isBig ? 50 : 26}px sans-serif`
   ctx.fillStyle = '#ffffff'
@@ -306,17 +319,15 @@ function drawQuestion(card) {
 
 function drawBubbles() {
   for (const b of bubbles) {
-    const alpha = b.hit ? Math.max(0, b.hitTimer / 500) : 1
-    ctx.globalAlpha = alpha
+    if (b.passed) continue
+    ctx.globalAlpha = b.hit ? Math.max(0, b.hitTimer / 500) : 1
 
-    // Glow ring when this is the aimed bubble
     if (b === targetBubble && !b.hit) {
       ctx.strokeStyle = '#ffffff'
       ctx.lineWidth   = 2.5
       ctx.beginPath(); ctx.arc(b.x, b.y, BUBBLE_R + 6, 0, Math.PI * 2); ctx.stroke()
     }
 
-    // Fill
     const grad = ctx.createRadialGradient(b.x - 10, b.y - 10, 4, b.x, b.y, BUBBLE_R)
     grad.addColorStop(0, b.hit ? (b.isCorrect ? '#1a5a30' : '#5a1a1a') : '#1e2860')
     grad.addColorStop(1, b.hit ? (b.isCorrect ? '#0a2a18' : '#2a0a0a') : '#0d1540')
@@ -326,13 +337,11 @@ function drawBubbles() {
     ctx.beginPath(); ctx.arc(b.x, b.y, BUBBLE_R, 0, Math.PI * 2)
     ctx.fill(); ctx.stroke()
 
-    // Text
     const isZh    = /[一-鿿]/.test(b.text)
     const fontSize = isZh && b.text.length <= 2 ? 26 : isZh ? 20 : b.text.length > 10 ? 14 : 17
     ctx.font      = `bold ${fontSize}px sans-serif`
     ctx.fillStyle = b.hit ? (b.isCorrect ? '#00ff88' : '#ff5566') : '#ccdaff'
     ctx.textAlign = 'center'
-    // Wrap long text
     if (b.text.length > 12 && !isZh) {
       const mid = Math.ceil(b.text.length / 2)
       const sp  = b.text.lastIndexOf(' ', mid) > 0 ? b.text.lastIndexOf(' ', mid) : mid
@@ -341,7 +350,6 @@ function drawBubbles() {
     } else {
       ctx.fillText(b.text, b.x, b.y + 6)
     }
-
     ctx.globalAlpha = 1
   }
 }
@@ -357,14 +365,12 @@ function drawBullets() {
 
 function drawShip(x) {
   const y = SHIP_Y
-  // Glow
   const g = ctx.createRadialGradient(x, y, 0, x, y, 36)
   g.addColorStop(0, 'rgba(80,100,255,0.3)')
   g.addColorStop(1, 'rgba(80,100,255,0)')
   ctx.fillStyle = g
   ctx.beginPath(); ctx.arc(x, y, 36, 0, Math.PI * 2); ctx.fill()
 
-  // Body
   ctx.fillStyle = targetBubble ? '#7799ff' : '#5577ff'
   ctx.beginPath()
   ctx.moveTo(x,      y - 26)
@@ -373,7 +379,6 @@ function drawShip(x) {
   ctx.closePath()
   ctx.fill()
 
-  // Flame
   ctx.fillStyle = targetBubble ? '#ffaa00' : '#ff7722'
   const flicker = Math.sin(time * 0.018) * 6
   ctx.beginPath()
@@ -383,20 +388,29 @@ function drawShip(x) {
   ctx.closePath()
   ctx.fill()
 
-  // Aim line (faint, toward target)
-  if (targetBubble && !targetBubble.hit) {
+  if (targetBubble && !targetBubble.hit && !targetBubble.passed) {
     ctx.strokeStyle = 'rgba(150,170,255,0.2)'
     ctx.lineWidth   = 1
     ctx.setLineDash([6, 6])
-    ctx.beginPath()
-    ctx.moveTo(x, y - 26)
-    ctx.lineTo(targetBubble.x, targetBubble.y)
-    ctx.stroke()
+    ctx.beginPath(); ctx.moveTo(x, y - 26); ctx.lineTo(targetBubble.x, targetBubble.y); ctx.stroke()
     ctx.setLineDash([])
   }
 }
 
 function drawHUD() {
+  // Row 1: hearts left, Q counter right
+  ctx.font      = '20px sans-serif'
+  ctx.textAlign = 'left'
+  for (let i = 0; i < 3; i++) {
+    ctx.fillStyle = i < lives ? '#ff4455' : '#222233'
+    ctx.fillText('♥', 14 + i * 26, H - 40)
+  }
+  ctx.textAlign = 'right'
+  ctx.fillStyle = '#445566'
+  ctx.font      = '13px sans-serif'
+  ctx.fillText(`Q ${questionsAnswered + 1}`, W - 14, H - 40)
+
+  // Row 2: score left, streak right
   ctx.textAlign = 'left'
   ctx.fillStyle = '#ffffff'
   ctx.font      = 'bold 22px sans-serif'
@@ -409,14 +423,6 @@ function drawHUD() {
     ctx.font      = 'bold 17px sans-serif'
     ctx.fillText(`×${mult} STREAK`, W - 14, H - 14)
   }
-
-  // Progress dots
-  const r = 5, dotY = H - 44, sp = r * 2 + 5
-  const ox = W / 2 - (run.length * sp - 5) / 2 + r
-  for (let i = 0; i < run.length; i++) {
-    ctx.fillStyle = i < runIdx ? '#5577ff' : '#222244'
-    ctx.beginPath(); ctx.arc(ox + i * sp, dotY, r, 0, Math.PI * 2); ctx.fill()
-  }
 }
 
 function drawFlash() {
@@ -427,59 +433,42 @@ function drawFlash() {
   ctx.globalAlpha = 1
 }
 
-// ── Screens ───────────────────────────────────────────────────────────────────
 function drawStart() {
   drawBg()
   ctx.textAlign = 'center'
-
   ctx.fillStyle = '#ffffff'
   ctx.font      = 'bold 38px sans-serif'
   ctx.fillText('汉字 Shooter', W / 2, H / 2 - 110)
-
   ctx.font      = '17px sans-serif'
   ctx.fillStyle = '#8899cc'
   ctx.fillText('Hold a bubble to aim and shoot', W / 2, H / 2 - 62)
-  ctx.fillText('Hit the right answer for a multiplier', W / 2, H / 2 - 36)
-
+  ctx.fillText("Don't let the right answer through!", W / 2, H / 2 - 36)
   ctx.font      = '13px sans-serif'
   ctx.fillStyle = '#445566'
-  ctx.fillText('HSK 3  •  10 questions  •  3 answer types', W / 2, H / 2 - 6)
-
+  ctx.fillText('HSK 3  •  3 lives  •  3 answer types', W / 2, H / 2 - 6)
   ctx.fillStyle = '#3344cc'
   roundRect(W / 2 - 90, H / 2 + 28, 180, 54, 12)
   ctx.fill()
   ctx.fillStyle = '#ffffff'
   ctx.font      = 'bold 22px sans-serif'
   ctx.fillText('START', W / 2, H / 2 + 61)
-
-  ctx.fillStyle = '#334455'
-  ctx.font      = '13px sans-serif'
-  ctx.fillText('tap and hold any bubble to shoot', W / 2, H - 24)
 }
 
 function drawDone() {
   drawBg()
   ctx.textAlign = 'center'
-
   ctx.fillStyle = '#ffffff'
   ctx.font      = 'bold 32px sans-serif'
-  ctx.fillText('完成了！', W / 2, H * 0.22)
-
+  ctx.fillText('Game Over', W / 2, H * 0.22)
   ctx.font      = '18px sans-serif'
   ctx.fillStyle = '#8899cc'
-  ctx.fillText('Final Score', W / 2, H * 0.36)
-
-  ctx.font      = 'bold 70px sans-serif'
-  ctx.fillStyle = '#ffd700'
-  ctx.fillText(score, W / 2, H * 0.50)
-
-  // Perfect streak of 10 → 100+200+400+600×7 = 5500
-  const maxScore = 100 + 200 + 400 + 600 * 7
-  const pct      = Math.min(100, Math.round(score / maxScore * 100))
+  ctx.fillText(`${questionsAnswered} questions answered`, W / 2, H * 0.33)
   ctx.font      = '15px sans-serif'
   ctx.fillStyle = '#445566'
-  ctx.fillText(`${pct}% of max possible`, W / 2, H * 0.57)
-
+  ctx.fillText('Final Score', W / 2, H * 0.42)
+  ctx.font      = 'bold 70px sans-serif'
+  ctx.fillStyle = '#ffd700'
+  ctx.fillText(score, W / 2, H * 0.55)
   ctx.fillStyle = '#3344cc'
   roundRect(W / 2 - 90, H * 0.65, 180, 54, 12)
   ctx.fill()
@@ -500,7 +489,7 @@ function loop(ts) {
     drawDone()
   } else {
     drawBg()
-    if (run[runIdx - 1]) drawQuestion(run[runIdx - 1])
+    if (currentCard) drawQuestion(currentCard)
     drawBubbles()
     drawBullets()
     drawFlash()
