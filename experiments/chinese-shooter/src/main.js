@@ -205,9 +205,11 @@ function update(dt) {
     }
   }
 
-  // Fire bullets while holding a live bubble
+  // Fire only once the ship is aligned under the target (prevents shooting wrong
+  // bubbles touched just to navigate toward the correct one)
+  const aligned = targetBubble && Math.abs(shipX - targetBubble.x) < 30
   bulletCooldown -= dt
-  if (targetBubble && !targetBubble.hit && !targetBubble.passed && bulletCooldown <= 0) {
+  if (aligned && !targetBubble.hit && !targetBubble.passed && bulletCooldown <= 0) {
     bullets.push({ x: shipX, y: SHIP_Y - 28 })
     bulletCooldown = 120
   }
