@@ -19,8 +19,12 @@ const BUBBLE_R     = 48
 const BULLET_SPEED = 9
 const SHIP_SPEED   = 5.5
 const NUM_OPTIONS  = 3
-const SPAWN_Y      = 160       // bubbles start just below the question box
-const PASS_Y       = SHIP_Y    // bubble center crosses this → it got through
+const SPAWN_Y      = 160
+const PASS_Y       = SHIP_Y
+
+function bubbleSpeed() {
+  return 0.7 + Math.min(questionsAnswered / 20, 1.0) * 0.8
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function pick(arr, n) {
@@ -65,11 +69,6 @@ function roundRect(x, y, w, h, r) {
   ctx.closePath()
 }
 
-// Speed scales from 0.7 to 1.5 px/frame over 20 questions
-function bubbleSpeed() {
-  return 0.7 + Math.min(questionsAnswered / 20, 1.0) * 0.8
-}
-
 // ── State ─────────────────────────────────────────────────────────────────────
 let phase             = 'start'
 let deck              = []
@@ -78,12 +77,14 @@ let currentCard       = null
 let bubbles           = []
 let bullets           = []
 let shipX             = W / 2
-let targetBubble      = null
+let pressX            = null       // current x of held press; null = not pressing
+let targetBubble      = null       // bubble nearest to pressX (visual only)
 let score             = 0
 let streak            = 0
 let lives             = 3
 let questionsAnswered = 0
 let resolving         = false
+let pendingNextCard   = false
 let flashColor        = ''
 let flashAlpha        = 0
 let feedback          = null
@@ -109,14 +110,12 @@ function nextCard() {
     deck    = buildDeck()
     deckIdx = 0
   }
-  currentCard  = deck[deckIdx++]
-  targetBubble = null
-  bullets      = []
-  feedback     = null
-  feedTimer    = 0
-  resolving    = false
+  currentCard = deck[deckIdx++]
+  bullets     = []
+  resolving   = false
+  // feedback/feedTimer intentionally NOT cleared — carry over briefly
   spawnBubbles(currentCard)
-  phase        = 'playing'
+  phase = 'playing'
 }
 
 function startGame() {
@@ -127,6 +126,9 @@ function startGame() {
   lives             = 3
   questionsAnswered = 0
   resolving         = false
+  pendingNextCard   = false
+  feedback          = null
+  feedTimer         = 0
   shipX             = W / 2
   nextCard()
 }
@@ -140,10 +142,6 @@ function getCanvasPos(clientX, clientY) {
   }
 }
 
-function bubbleAt(x, y) {
-  return bubbles.find(b => !b.hit && !b.passed && Math.hypot(b.x - x, b.y - y) < BUBBLE_R + 10)
-}
-
 function onPress(x, y) {
   if (phase === 'start') { startGame(); return }
   if (phase === 'done') {
@@ -151,12 +149,18 @@ function onPress(x, y) {
     return
   }
   if (phase !== 'playing') return
-  targetBubble = bubbleAt(x, y) ?? null
+  pressX = x
 }
 
-function onRelease() { targetBubble = null }
+function onMove(x) {
+  if (pressX === null || phase !== 'playing') return
+  pressX = x
+}
+
+function onRelease() { pressX = null }
 
 canvas.addEventListener('mousedown',  e => { const p = getCanvasPos(e.clientX, e.clientY); onPress(p.x, p.y) })
+canvas.addEventListener('mousemove',  e => { if (e.buttons) { const p = getCanvasPos(e.clientX, e.clientY); onMove(p.x) } })
 canvas.addEventListener('mouseup',    onRelease)
 canvas.addEventListener('mouseleave', onRelease)
 
@@ -164,6 +168,11 @@ canvas.addEventListener('touchstart', e => {
   e.preventDefault()
   const p = getCanvasPos(e.touches[0].clientX, e.touches[0].clientY)
   onPress(p.x, p.y)
+}, { passive: false })
+canvas.addEventListener('touchmove', e => {
+  e.preventDefault()
+  const p = getCanvasPos(e.touches[0].clientX, e.touches[0].clientY)
+  onMove(p.x)
 }, { passive: false })
 canvas.addEventListener('touchend',    e => { e.preventDefault(); onRelease() }, { passive: false })
 canvas.addEventListener('touchcancel', e => { e.preventDefault(); onRelease() }, { passive: false })
@@ -179,12 +188,17 @@ function update(dt) {
   if (feedTimer > 0) feedTimer -= dt
   if (phase !== 'playing') return
 
-  // Ship tracks the held bubble
-  if (targetBubble && !targetBubble.hit && !targetBubble.passed) {
-    const dx = targetBubble.x - shipX
+  // Ship moves toward pressX (anywhere on screen)
+  if (pressX !== null) {
+    const dx = pressX - shipX
     shipX += Math.sign(dx) * Math.min(Math.abs(dx), SHIP_SPEED * (dt / 16))
   }
   shipX = Math.max(24, Math.min(W - 24, shipX))
+
+  // Nearest live bubble to pressX (for aim indicator and fire target)
+  targetBubble = pressX !== null
+    ? (bubbles.find(b => !b.hit && !b.passed && Math.abs(b.x - pressX) < BUBBLE_R + 15) ?? null)
+    : null
 
   // Advance bubbles downward
   const spd = bubbleSpeed()
@@ -194,22 +208,24 @@ function update(dt) {
     b.y += spd * (dt / 16)
     if (b.y >= PASS_Y) {
       b.passed = true
-      if (b === targetBubble) targetBubble = null
       if (b.isCorrect && !resolving) {
-        streak     = 0
-        lives      = Math.max(0, lives - 1)
-        flashColor = '#ff4400'; flashAlpha = 0.4
-        feedback   = { text: 'Missed!  −♥', color: '#ff7744' }
-        feedTimer  = 1000
+        resolving   = true
+        streak      = 0
+        lives       = Math.max(0, lives - 1)
+        flashColor  = '#ff4400'; flashAlpha = 0.4
+        feedback    = { text: 'Missed!  −♥', color: '#ff7744' }
+        feedTimer   = 1000
+        questionsAnswered++
+        if (lives <= 0) { phase = 'done'; return }
+        setTimeout(nextCard, 800)
       }
     }
   }
 
-  // Fire only once the ship is aligned under the target (prevents shooting wrong
-  // bubbles touched just to navigate toward the correct one)
-  const aligned = targetBubble && Math.abs(shipX - targetBubble.x) < 30
+  // Fire when ship has arrived at the pressed position
+  const aligned = pressX !== null && Math.abs(shipX - pressX) < 30
   bulletCooldown -= dt
-  if (aligned && !targetBubble.hit && !targetBubble.passed && bulletCooldown <= 0) {
+  if (aligned && targetBubble && !targetBubble.hit && !targetBubble.passed && bulletCooldown <= 0) {
     bullets.push({ x: shipX, y: SHIP_Y - 28 })
     bulletCooldown = 120
   }
@@ -232,39 +248,31 @@ function update(dt) {
     if (consumed) continue
   }
 
-  // Resolution: once the correct bubble is gone (hit or passed), pop the rest
-  if (!resolving) {
-    const correct = bubbles.find(b => b.isCorrect)
-    if (correct && (correct.hit || correct.passed)) {
-      for (const b of bubbles) {
-        if (!b.hit && !b.passed) { b.hit = true; b.hitTimer = 400 }
-      }
-    }
-    if (bubbles.every(b => b.hit ? b.hitTimer <= 0 : b.passed)) {
-      resolving = true
-      questionsAnswered++
-      if (lives <= 0) { phase = 'done'; return }
-      setTimeout(nextCard, 250)
-    }
+  // Advance to next card immediately after correct hit (deferred out of bullet loop)
+  if (pendingNextCard) {
+    pendingNextCard = false
+    questionsAnswered++
+    if (lives <= 0) { phase = 'done'; return }
+    nextCard()
   }
 }
 
 function scoreHit(b) {
   if (b.isCorrect) {
     streak++
-    const mult = streak >= 4 ? 6 : streak >= 3 ? 4 : streak >= 2 ? 2 : 1
-    score     += 100 * mult
+    // Multiplier keeps growing: ×1, ×2, ×4, ×6, ×8, ×10 …
+    const mult = streak <= 1 ? 1 : (streak - 1) * 2
+    score += 100 * mult
     flashColor = '#00e676'; flashAlpha = 0.3
     feedback   = { text: streak >= 2 ? `Correct!  ×${mult}` : 'Correct!', color: '#00ff88' }
-    feedTimer  = 1200
-    targetBubble = null
+    feedTimer  = 800
+    pendingNextCard = true      // resolved at end of update, outside bullet loop
   } else {
-    streak     = 0
-    score      = Math.max(0, score - 50)
+    streak    = 0
+    score     = Math.max(0, score - 50)
     flashColor = '#ff1744'; flashAlpha = 0.3
     feedback   = { text: 'Wrong!  −50', color: '#ff5566' }
     feedTimer  = 900
-    targetBubble = null
   }
 }
 
@@ -366,14 +374,15 @@ function drawBullets() {
 }
 
 function drawShip(x) {
-  const y = SHIP_Y
+  const y       = SHIP_Y
+  const active  = pressX !== null
   const g = ctx.createRadialGradient(x, y, 0, x, y, 36)
   g.addColorStop(0, 'rgba(80,100,255,0.3)')
   g.addColorStop(1, 'rgba(80,100,255,0)')
   ctx.fillStyle = g
   ctx.beginPath(); ctx.arc(x, y, 36, 0, Math.PI * 2); ctx.fill()
 
-  ctx.fillStyle = targetBubble ? '#7799ff' : '#5577ff'
+  ctx.fillStyle = active ? '#7799ff' : '#5577ff'
   ctx.beginPath()
   ctx.moveTo(x,      y - 26)
   ctx.lineTo(x - 16, y + 14)
@@ -381,7 +390,7 @@ function drawShip(x) {
   ctx.closePath()
   ctx.fill()
 
-  ctx.fillStyle = targetBubble ? '#ffaa00' : '#ff7722'
+  ctx.fillStyle = active ? '#ffaa00' : '#ff7722'
   const flicker = Math.sin(time * 0.018) * 6
   ctx.beginPath()
   ctx.moveTo(x - 8, y + 14)
@@ -419,7 +428,7 @@ function drawHUD() {
   ctx.fillText(score, 14, H - 14)
 
   if (streak >= 2) {
-    const mult = streak >= 4 ? 6 : streak >= 3 ? 4 : 2
+    const mult = (streak - 1) * 2
     ctx.textAlign = 'right'
     ctx.fillStyle = '#ffd700'
     ctx.font      = 'bold 17px sans-serif'
@@ -443,8 +452,8 @@ function drawStart() {
   ctx.fillText('汉字 Shooter', W / 2, H / 2 - 110)
   ctx.font      = '17px sans-serif'
   ctx.fillStyle = '#8899cc'
-  ctx.fillText('Hold a bubble to aim and shoot', W / 2, H / 2 - 62)
-  ctx.fillText("Don't let the right answer through!", W / 2, H / 2 - 36)
+  ctx.fillText('Press anywhere to move your ship', W / 2, H / 2 - 62)
+  ctx.fillText("Align under the right answer to shoot", W / 2, H / 2 - 36)
   ctx.font      = '13px sans-serif'
   ctx.fillStyle = '#445566'
   ctx.fillText('HSK 3  •  3 lives  •  3 answer types', W / 2, H / 2 - 6)
