@@ -258,6 +258,7 @@ function update(dt) {
 }
 
 function scoreHit(b) {
+  pressX = null   // require re-press after any hit so firing doesn't continue
   if (b.isCorrect) {
     streak++
     // Multiplier keeps growing: ×1, ×2, ×4, ×6, ×8, ×10 …
