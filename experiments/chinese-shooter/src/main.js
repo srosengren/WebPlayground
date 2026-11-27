@@ -104,13 +104,15 @@ let time              = 0
 function spawnBubbles(card) {
   const opts = shuffleOptions(card)
   bubbles = opts.map((text, i) => ({
-    x: (W / (NUM_OPTIONS + 1)) * (i + 1),
-    y: SPAWN_Y,
+    x:          (W / (NUM_OPTIONS + 1)) * (i + 1),
+    y:          SPAWN_Y,
+    idx:        i,
+    animOffset: Math.random() * Math.PI * 2,
     text,
-    isCorrect: text === card.correct,
-    hit:       false,
-    hitTimer:  0,
-    passed:    false,
+    isCorrect:  text === card.correct,
+    hit:        false,
+    hitTimer:   0,
+    passed:     false,
   }))
 }
 
@@ -367,38 +369,139 @@ function drawFeedback() {
   ctx.globalAlpha = 1
 }
 
+// Three enemy palettes: red invader / green alien / purple specter
+const ENEMY_PAL = [
+  { inner: '#3a0808', outer: '#1a0303', rim: '#cc2200', eyeFill: '#ff5533', eyePupil: '#ff1100', feat: '#ff3311' },
+  { inner: '#083a12', outer: '#041a07', rim: '#009940', eyeFill: '#ccffdd', eyePupil: '#003311', feat: '#22cc55' },
+  { inner: '#1a0838', outer: '#0d041f', rim: '#7722cc', eyeFill: '#ddaaff', eyePupil: '#330055', feat: '#aa44ff' },
+]
+
+function drawEnemyFace(bx, by, type, targeted) {
+  const p = ENEMY_PAL[type]
+
+  if (type === 0) {
+    // ── Red invader — twin horns, angry brow, glowing eyes ──
+    ctx.fillStyle = p.feat
+    ctx.beginPath(); ctx.moveTo(bx - 9, by - 27); ctx.lineTo(bx - 6, by - 37); ctx.lineTo(bx - 3, by - 27); ctx.closePath(); ctx.fill()
+    ctx.beginPath(); ctx.moveTo(bx + 3, by - 27); ctx.lineTo(bx + 6, by - 37); ctx.lineTo(bx + 9, by - 27); ctx.closePath(); ctx.fill()
+    ctx.fillStyle = p.eyePupil  // brow bars
+    ctx.beginPath(); ctx.rect(bx - 17, by - 19, 9, 2.5); ctx.fill()
+    ctx.beginPath(); ctx.rect(bx + 8,  by - 19, 9, 2.5); ctx.fill()
+    if (targeted) {   // eye glow
+      ctx.globalAlpha *= 0.35
+      ctx.fillStyle = p.eyeFill
+      ctx.beginPath(); ctx.arc(bx - 11, by - 12, 9, 0, Math.PI * 2); ctx.fill()
+      ctx.beginPath(); ctx.arc(bx + 11, by - 12, 9, 0, Math.PI * 2); ctx.fill()
+      ctx.globalAlpha /= 0.35
+    }
+    ctx.fillStyle = p.eyeFill
+    ctx.beginPath(); ctx.arc(bx - 11, by - 12, 5,   0, Math.PI * 2); ctx.fill()
+    ctx.beginPath(); ctx.arc(bx + 11, by - 12, 5,   0, Math.PI * 2); ctx.fill()
+    ctx.fillStyle = p.eyePupil
+    ctx.beginPath(); ctx.arc(bx - 11, by - 12, 2.5, 0, Math.PI * 2); ctx.fill()
+    ctx.beginPath(); ctx.arc(bx + 11, by - 12, 2.5, 0, Math.PI * 2); ctx.fill()
+
+  } else if (type === 1) {
+    // ── Green alien — antennae, large oval eyes with highlight ──
+    ctx.strokeStyle = p.feat; ctx.lineWidth = 1.5
+    ctx.beginPath(); ctx.moveTo(bx - 7, by - 27); ctx.lineTo(bx - 11, by - 38); ctx.stroke()
+    ctx.beginPath(); ctx.moveTo(bx + 7, by - 27); ctx.lineTo(bx + 11, by - 38); ctx.stroke()
+    ctx.fillStyle = p.eyeFill  // tip orbs
+    ctx.beginPath(); ctx.arc(bx - 11, by - 38, 3, 0, Math.PI * 2); ctx.fill()
+    ctx.beginPath(); ctx.arc(bx + 11, by - 38, 3, 0, Math.PI * 2); ctx.fill()
+    if (targeted) {
+      ctx.globalAlpha *= 0.3
+      ctx.fillStyle = p.eyeFill
+      ctx.beginPath(); ctx.arc(bx - 11, by - 12, 10, 0, Math.PI * 2); ctx.fill()
+      ctx.beginPath(); ctx.arc(bx + 11, by - 12, 10, 0, Math.PI * 2); ctx.fill()
+      ctx.globalAlpha /= 0.3
+    }
+    ctx.fillStyle = p.eyeFill
+    ctx.beginPath(); ctx.ellipse(bx - 11, by - 12, 6, 8, 0, 0, Math.PI * 2); ctx.fill()
+    ctx.beginPath(); ctx.ellipse(bx + 11, by - 12, 6, 8, 0, 0, Math.PI * 2); ctx.fill()
+    ctx.fillStyle = p.eyePupil
+    ctx.beginPath(); ctx.arc(bx - 11, by - 12, 3.5, 0, Math.PI * 2); ctx.fill()
+    ctx.beginPath(); ctx.arc(bx + 11, by - 12, 3.5, 0, Math.PI * 2); ctx.fill()
+    ctx.fillStyle = 'rgba(255,255,255,0.75)'
+    ctx.beginPath(); ctx.arc(bx - 13, by - 14, 1.5, 0, Math.PI * 2); ctx.fill()
+    ctx.beginPath(); ctx.arc(bx + 9,  by - 14, 1.5, 0, Math.PI * 2); ctx.fill()
+
+  } else {
+    // ── Purple specter — crown spikes, squinting slit eyes ──
+    ctx.fillStyle = p.feat
+    for (const [ox, oh] of [[-14, 2], [-7, 7], [0, 9], [7, 7], [14, 2]]) {
+      ctx.beginPath()
+      ctx.moveTo(bx + ox - 3, by - 27)
+      ctx.lineTo(bx + ox,     by - 27 - oh - 7)
+      ctx.lineTo(bx + ox + 3, by - 27)
+      ctx.closePath(); ctx.fill()
+    }
+    if (targeted) {
+      ctx.globalAlpha *= 0.3
+      ctx.fillStyle = p.eyeFill
+      ctx.beginPath(); ctx.arc(bx - 11, by - 12, 10, 0, Math.PI * 2); ctx.fill()
+      ctx.beginPath(); ctx.arc(bx + 11, by - 12, 10, 0, Math.PI * 2); ctx.fill()
+      ctx.globalAlpha /= 0.3
+    }
+    ctx.fillStyle = p.eyeFill
+    ctx.beginPath(); ctx.ellipse(bx - 11, by - 12, 7, 3.5, -0.15, 0, Math.PI * 2); ctx.fill()
+    ctx.beginPath(); ctx.ellipse(bx + 11, by - 12, 7, 3.5,  0.15, 0, Math.PI * 2); ctx.fill()
+    ctx.fillStyle = p.eyePupil
+    ctx.beginPath(); ctx.ellipse(bx - 11, by - 12, 3.5, 2.5, -0.15, 0, Math.PI * 2); ctx.fill()
+    ctx.beginPath(); ctx.ellipse(bx + 11, by - 12, 3.5, 2.5,  0.15, 0, Math.PI * 2); ctx.fill()
+  }
+}
+
 function drawBubbles() {
   for (const b of bubbles) {
     if (b.passed) continue
     ctx.globalAlpha = b.hit ? Math.max(0, b.hitTimer / 500) : 1
 
+    // Gentle bob animation
+    const bob = Math.sin(time * 0.0025 + b.animOffset) * 2
+    const bx  = b.x, by = b.y + bob
+
+    // Aim ring
     if (b === targetBubble && !b.hit) {
       ctx.strokeStyle = '#ffffff'
-      ctx.lineWidth   = 2.5
-      ctx.beginPath(); ctx.arc(b.x, b.y, BUBBLE_R + 6, 0, Math.PI * 2); ctx.stroke()
+      ctx.lineWidth   = 2
+      ctx.beginPath(); ctx.arc(bx, by, BUBBLE_R + 5, 0, Math.PI * 2); ctx.stroke()
     }
 
-    const grad = ctx.createRadialGradient(b.x - 10, b.y - 10, 4, b.x, b.y, BUBBLE_R)
-    grad.addColorStop(0, b.hit ? (b.isCorrect ? '#1a5a30' : '#5a1a1a') : '#1e2860')
-    grad.addColorStop(1, b.hit ? (b.isCorrect ? '#0a2a18' : '#2a0a0a') : '#0d1540')
-    ctx.fillStyle   = grad
-    ctx.strokeStyle = b.hit ? (b.isCorrect ? '#00cc55' : '#cc2233') : '#3a4a9a'
-    ctx.lineWidth   = 2
-    ctx.beginPath(); ctx.arc(b.x, b.y, BUBBLE_R, 0, Math.PI * 2)
+    // Body fill
+    const pal  = ENEMY_PAL[b.idx % 3]
+    const grad = ctx.createRadialGradient(bx - 10, by - 10, 4, bx, by, BUBBLE_R)
+    if (b.hit) {
+      grad.addColorStop(0, b.isCorrect ? '#1a5a30' : '#5a1a1a')
+      grad.addColorStop(1, b.isCorrect ? '#0a2a18' : '#2a0a0a')
+      ctx.fillStyle   = grad
+      ctx.strokeStyle = b.isCorrect ? '#00cc55' : '#cc2233'
+    } else {
+      grad.addColorStop(0, pal.inner)
+      grad.addColorStop(1, pal.outer)
+      ctx.fillStyle   = grad
+      ctx.strokeStyle = pal.rim
+    }
+    ctx.lineWidth = 2
+    ctx.beginPath(); ctx.arc(bx, by, BUBBLE_R, 0, Math.PI * 2)
     ctx.fill(); ctx.stroke()
 
-    const isZh    = /[一-鿿]/.test(b.text)
-    const fontSize = isZh && b.text.length <= 2 ? 20 : isZh ? 14 : b.text.length > 9 ? 11 : 14
+    // Enemy face (only while alive)
+    if (!b.hit) drawEnemyFace(bx, by, b.idx % 3, b === targetBubble)
+
+    // Answer text — in the lower half, below the eyes
+    const isZh     = /[一-鿿]/.test(b.text)
+    const fontSize = isZh && b.text.length <= 2 ? 18 : isZh ? 13 : b.text.length > 9 ? 11 : 13
     ctx.font      = `bold ${fontSize}px sans-serif`
-    ctx.fillStyle = b.hit ? (b.isCorrect ? '#00ff88' : '#ff5566') : '#ccdaff'
+    ctx.fillStyle = b.hit ? (b.isCorrect ? '#00ff88' : '#ff5566') : '#ffffff'
     ctx.textAlign = 'center'
     if (b.text.length > 9 && !isZh) {
       const mid = Math.ceil(b.text.length / 2)
       const sp  = b.text.lastIndexOf(' ', mid) > 0 ? b.text.lastIndexOf(' ', mid) : mid
-      ctx.fillText(b.text.slice(0, sp),  b.x, b.y - 5)
-      ctx.fillText(b.text.slice(sp + 1), b.x, b.y + 9)
+      ctx.fillText(b.text.slice(0, sp),  bx, by + 8)
+      ctx.fillText(b.text.slice(sp + 1), bx, by + 20)
     } else {
-      ctx.fillText(b.text, b.x, b.y + 5)
+      ctx.fillText(b.text, bx, by + 15)
     }
     ctx.globalAlpha = 1
   }
