@@ -15,6 +15,15 @@ resize()
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const SHIP_Y       = H - 70
+
+// Pre-generate starfield once
+const STARS = Array.from({ length: 160 }, () => ({
+  x:     Math.random() * W,
+  y:     Math.random() * H,
+  r:     0.5 + Math.random() * 1.8,
+  speed: 0.12 + Math.random() * 0.4,
+  alpha: 0.35 + Math.random() * 0.65,
+}))
 const BUBBLE_R     = 36
 const BULLET_SPEED = 9
 const SHIP_SPEED   = 5.5
@@ -286,13 +295,40 @@ function promptFor(card) {
 
 // ── Draw ──────────────────────────────────────────────────────────────────────
 function drawBg() {
-  ctx.fillStyle = '#0d0d1a'
+  // Deep space gradient
+  const bg = ctx.createLinearGradient(0, 0, 0, H)
+  bg.addColorStop(0, '#060614')
+  bg.addColorStop(1, '#0a0a20')
+  ctx.fillStyle = bg
   ctx.fillRect(0, 0, W, H)
-  ctx.strokeStyle = '#151525'
-  ctx.lineWidth = 1
-  const sp = 35
+
+  // Nebula blobs — static, painted with large transparent fills
+  ctx.globalAlpha = 0.07
+  ctx.fillStyle = '#1a3090'; ctx.beginPath(); ctx.arc(W * 0.22, H * 0.28, 190, 0, Math.PI * 2); ctx.fill()
+  ctx.fillStyle = '#2d0e60'; ctx.beginPath(); ctx.arc(W * 0.78, H * 0.55, 160, 0, Math.PI * 2); ctx.fill()
+  ctx.fillStyle = '#0a1e55'; ctx.beginPath(); ctx.arc(W * 0.5,  H * 0.82, 140, 0, Math.PI * 2); ctx.fill()
+  ctx.globalAlpha = 1
+
+  // Scrolling starfield
+  for (const s of STARS) {
+    const y = (s.y + time * s.speed * 0.05) % H
+    ctx.globalAlpha = s.alpha
+    if (s.r < 1) {
+      ctx.fillStyle = '#ffffff'
+      ctx.fillRect(s.x - 0.5, y - 0.5, 1, 1)
+    } else {
+      ctx.fillStyle = s.r > 1.4 ? '#cce4ff' : '#ffffff'
+      ctx.beginPath(); ctx.arc(s.x, y, s.r, 0, Math.PI * 2); ctx.fill()
+    }
+  }
+  ctx.globalAlpha = 1
+
+  // Very faint grid — depth cue
+  ctx.strokeStyle = 'rgba(18,18,48,0.7)'
+  ctx.lineWidth   = 0.5
+  const sp = 40
   for (let i = 0; i <= H / sp + 1; i++) {
-    const y = ((time * 0.06 + i * sp) % H)
+    const y = ((time * 0.04 + i * sp) % H)
     ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke()
   }
 }
@@ -378,38 +414,96 @@ function drawBullets() {
 }
 
 function drawShip(x) {
-  const y       = SHIP_Y
-  const active  = pressX !== null
-  const g = ctx.createRadialGradient(x, y, 0, x, y, 36)
-  g.addColorStop(0, 'rgba(80,100,255,0.3)')
-  g.addColorStop(1, 'rgba(80,100,255,0)')
-  ctx.fillStyle = g
-  ctx.beginPath(); ctx.arc(x, y, 36, 0, Math.PI * 2); ctx.fill()
+  const active = pressX !== null
+  ctx.save()
+  ctx.translate(x, SHIP_Y)
 
-  ctx.fillStyle = active ? '#7799ff' : '#5577ff'
+  // Engine glow halo
+  const halo = ctx.createRadialGradient(0, 12, 0, 0, 12, 44)
+  halo.addColorStop(0, `rgba(60,120,255,${active ? 0.45 : 0.2})`)
+  halo.addColorStop(1, 'rgba(60,120,255,0)')
+  ctx.fillStyle = halo
+  ctx.beginPath(); ctx.arc(0, 12, 44, 0, Math.PI * 2); ctx.fill()
+
+  // Wings
+  ctx.fillStyle = active ? '#3d52c8' : '#2c3d9e'
+  ctx.beginPath()         // left
+  ctx.moveTo(-6,  2); ctx.lineTo(-24, 14); ctx.lineTo(-18, 22); ctx.lineTo(-5, 12)
+  ctx.closePath(); ctx.fill()
+  ctx.beginPath()         // right
+  ctx.moveTo( 6,  2); ctx.lineTo( 24, 14); ctx.lineTo( 18, 22); ctx.lineTo( 5, 12)
+  ctx.closePath(); ctx.fill()
+  // Wing highlight edge
+  ctx.strokeStyle = active ? 'rgba(140,160,255,0.5)' : 'rgba(100,120,220,0.3)'
+  ctx.lineWidth = 1
+  ctx.beginPath(); ctx.moveTo(-22, 14); ctx.lineTo(-6, 3); ctx.stroke()
+  ctx.beginPath(); ctx.moveTo( 22, 14); ctx.lineTo( 6, 3); ctx.stroke()
+
+  // Hull body
+  const hull = ctx.createLinearGradient(-8, -26, 8, 22)
+  hull.addColorStop(0,   active ? '#a0b4ff' : '#7b93ee')
+  hull.addColorStop(0.4, active ? '#5e78e8' : '#4460cc')
+  hull.addColorStop(1,   active ? '#2a3ea8' : '#1e3090')
+  ctx.fillStyle = hull
   ctx.beginPath()
-  ctx.moveTo(x,      y - 26)
-  ctx.lineTo(x - 16, y + 14)
-  ctx.lineTo(x + 16, y + 14)
-  ctx.closePath()
+  ctx.moveTo(0, -28)
+  ctx.bezierCurveTo( 5, -18,  8, -10,  8,  -2)
+  ctx.lineTo(8, 14); ctx.lineTo(5, 22); ctx.lineTo(-5, 22); ctx.lineTo(-8, 14)
+  ctx.lineTo(-8, -2)
+  ctx.bezierCurveTo(-8, -10, -5, -18, 0, -28)
   ctx.fill()
+  // Hull rim
+  ctx.strokeStyle = active ? 'rgba(190,210,255,0.4)' : 'rgba(140,170,255,0.25)'
+  ctx.lineWidth = 1; ctx.stroke()
 
-  ctx.fillStyle = active ? '#ffaa00' : '#ff7722'
-  const flicker = Math.sin(time * 0.018) * 6
-  ctx.beginPath()
-  ctx.moveTo(x - 8, y + 14)
-  ctx.lineTo(x + 8, y + 14)
-  ctx.lineTo(x, y + 28 + flicker)
-  ctx.closePath()
-  ctx.fill()
+  // Centre spine
+  ctx.strokeStyle = active ? 'rgba(210,225,255,0.55)' : 'rgba(160,185,255,0.35)'
+  ctx.lineWidth = 1.5
+  ctx.beginPath(); ctx.moveTo(0, -26); ctx.lineTo(0, 18); ctx.stroke()
 
+  // Cockpit dome
+  const cp = ctx.createRadialGradient(-1.5, -15, 0, 0, -13, 5.5)
+  cp.addColorStop(0, 'rgba(220,245,255,0.95)')
+  cp.addColorStop(0.5, 'rgba(90,190,255,0.75)')
+  cp.addColorStop(1, 'rgba(30,70,200,0.5)')
+  ctx.fillStyle = cp
+  ctx.beginPath(); ctx.ellipse(0, -13, 4, 6, 0, 0, Math.PI * 2); ctx.fill()
+
+  // Cannon barrel
+  ctx.fillStyle = active ? '#aabbee' : '#8899cc'
+  ctx.beginPath(); ctx.rect(-1.5, -32, 3, 9); ctx.fill()
+  ctx.fillStyle = active ? '#ddeeff' : '#bbccee'
+  ctx.beginPath(); ctx.rect(-0.5, -33, 1, 8); ctx.fill()
+
+  // Engine nacelles
+  ctx.fillStyle = '#0d0d28'
+  ctx.beginPath(); ctx.ellipse(-3.5, 22, 2.5, 2, 0, 0, Math.PI * 2); ctx.fill()
+  ctx.beginPath(); ctx.ellipse( 3.5, 22, 2.5, 2, 0, 0, Math.PI * 2); ctx.fill()
+
+  // Exhaust flames
+  const f1 = Math.sin(time * 0.020) * 5
+  const f2 = Math.sin(time * 0.026 + 1.1) * 4
+  for (const [ex, fk] of [[-3.5, f1], [3.5, f2]]) {
+    const fg = ctx.createLinearGradient(ex, 23, ex, 33 + fk)
+    fg.addColorStop(0,   active ? '#ffffaa' : '#ffcc44')
+    fg.addColorStop(0.4, active ? '#ff9900' : '#ff7700')
+    fg.addColorStop(1,   'rgba(255,40,0,0)')
+    ctx.fillStyle = fg
+    ctx.beginPath()
+    ctx.moveTo(ex - 2.5, 23); ctx.lineTo(ex + 2.5, 23); ctx.lineTo(ex, 33 + fk)
+    ctx.closePath(); ctx.fill()
+  }
+
+  // Aim line toward target bubble
   if (targetBubble && !targetBubble.hit && !targetBubble.passed) {
-    ctx.strokeStyle = 'rgba(150,170,255,0.2)'
+    ctx.strokeStyle = 'rgba(150,170,255,0.18)'
     ctx.lineWidth   = 1
-    ctx.setLineDash([6, 6])
-    ctx.beginPath(); ctx.moveTo(x, y - 26); ctx.lineTo(targetBubble.x, targetBubble.y); ctx.stroke()
+    ctx.setLineDash([5, 7])
+    ctx.beginPath(); ctx.moveTo(0, -32); ctx.lineTo(targetBubble.x - x, targetBubble.y - SHIP_Y); ctx.stroke()
     ctx.setLineDash([])
   }
+
+  ctx.restore()
 }
 
 function drawHUD() {
